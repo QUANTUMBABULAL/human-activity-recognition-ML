@@ -1,0 +1,15 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+data/
+*.parquet
+*.npz
+results/figures/*.png
+*.log
+svm_stageA
+.DS_Store
+Thumbs.db
+.vscode/
