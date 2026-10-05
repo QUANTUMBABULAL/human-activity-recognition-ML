@@ -152,6 +152,12 @@ Fill in one row per decision as runs happen (continue P1's numbering style with 
 | P2-10 | AdaBoost CV implementation | n/a | One 500-tree fit per (depth, fold); counts 50/100/250 are scored with `staged_predict`. Folds run in parallel (`--n-jobs`); AdaBoost itself has no `n_jobs` | The first k trees of an n-tree AdaBoost fit are exactly a k-tree fit (same seeded RNG sequence), checked in `test_adaboost_staged_scores_match_a_fresh_smaller_fit`. Cuts CV cost about 4x versus refitting each count |
 | P2-11 | AdaBoost tuning size | Not stated | CV on **100k** training rows (`--tune-n`, half the DT/RF default), final fit on all 1,633,207 training rows | Compute (see section 11). Actual rows logged in JSON (`cv.tune_rows`, `n_train`) |
 | P2-12 | AdaBoost early stopping / determinism | n/a | sklearn stops boosting if a tree has zero weighted error (or is no better than chance). The JSON records `n_trees_fitted`, `stopped_early` and `last_estimator_error`. `random_state=229` gives identical trees and predictions on reruns | So a "500-tree" result that actually used fewer trees is visible. Determinism checked in `tests/test_p2_models.py` |
+| P2-13 | MLP architecture | 512-512 ReLU, dropout 0.5, softmax, categorical cross-entropy, SGD | `Input(d) -> Dense(512, relu) -> Dropout(0.5) -> Dense(512, relu) -> Dropout(0.5) -> Dense(12, softmax)`; loss `categorical_crossentropy` on one-hot targets; d = 11 (reduced) / 31 (full); 274,956 / 285,196 parameters | As reported. Dropout after each hidden layer is our reading of "dropout 0.5" (placement not stated). Architecture is fixed: no architecture search, so no CV helper/grid for the MLP (unlike section 2's per-model template) |
+| P2-14 | MLP optimiser / batch | SGD; learning rate, momentum and batch size not stated | `SGD(learning_rate=0.01, momentum=0.0)`, `batch_size=32` | Keras defaults of the report's era (plain SGD, `fit` batch 32), the most likely unstated values. All three are CLI flags; any change is logged in `params` |
+| P2-15 | MLP epochs / validation | "100 epochs shown for reduced set"; full-set epochs and validation scheme not stated | Fixed 100 epochs for both sets. Inside `KerasMLP.fit`, a seeded 10% slice of the rows passed to `fit` (training rows only) is held out as Keras `validation_data` for monitoring; per-epoch loss/accuracy saved to `results/metrics/mlp_<fs>_history.csv`. Early stopping off by default (`--patience N` turns it on, `restore_best_weights=True`, monitored on that slice). `--val-frac 0` fits on all training rows | Keeps the paper's fixed schedule while giving a test-free learning curve. Cost: the network sees 90% of training rows (1,469,886 of 1,633,207). The JSON's `n_train` is the rows given to `fit`; `n_fit_rows` / `n_val_rows` give the actual split |
+| P2-16 | MLP scaling | Not stated for the MLP | `StandardScaler` fitted inside `KerasMLP.fit` on the fitting rows only (not the validation slice, never test); `predict` only calls `transform` | No leakage; tested (scaler mean == fitting-row mean, `n_samples_seen_` == fitting rows, predict on shifted data with `fit` patched to raise) |
+| P2-17 | MLP labels | n/a | Fixed map from `LABEL_ORDER`: ID -> position 0..11 -> one-hot; prediction = `LABEL_ORDER[argmax]`. Unknown IDs (e.g. 0) raise. Output layer always has 12 units, even if a subsample lacks a class | Runner/metrics index by original IDs; tested that softmax index i decodes to `LABEL_ORDER[i]` |
+| P2-18 | MLP reproducibility | n/a | `keras.utils.set_random_seed(229)` (Python, NumPy, TF) at the start of every `fit`, `Dropout(seed=229)`, and `tf.config.experimental.enable_op_determinism()` (process-wide). Same machine + versions (TF 2.21.0, Keras 3.15.1, CPU) -> bit-identical probabilities (tested) | Not guaranteed across machines, CPU instruction sets, thread counts or TF/oneDNN versions. TF on native Windows has no GPU support, so runs are CPU only |
 | | | | | |
 
 ## 11. AdaBoost compute notes
@@ -173,3 +179,24 @@ Extrapolations only (assumed linear scaling; not measured end to end):
 
 Run one feature set at a time. If a full fit is not feasible, use `--fit-n` and report the result as "reproduced on
 a subsample". Smoke run (`--smoke`, 3k CV rows, 10k fit rows, 5k test rows, temp dir) takes about 30 s.
+
+## 12. MLP compute notes
+
+Probe on real training rows (2026-10-05, this machine, CPU only, 1 epoch on 300k rows, no validation):
+
+| Set | batch 32 (default) | batch 256 |
+|---|---|---|
+| full | 43.6 s | 10.7 s |
+| reduced | 31.1 s | 14.9 s |
+
+Extrapolations only (linear in rows; per-epoch validation and the final predict add a little; probe timings are
+noisy, e.g. the first fit includes TF warm-up):
+
+- 100 epochs on 1,469,886 fitting rows at batch 32: about **6 h (full)** and **4 h (reduced)**, so about 10 h for
+  `--feature-set both`.
+- At `--batch-size 256` about 1.5-2 h per set, but that is a deviation from P2-14 and changes the optimisation
+  (8x fewer SGD updates per epoch at the same learning rate), so it must be logged as such.
+- Memory: about 0.5 GB for the full-set arrays (X, scaled X, one-hot Y); the network is about 1 MB.
+
+Smoke run (`--smoke`: real data and frozen split, 20k fit rows, 5k test rows, 2 epochs, temp dir) takes about 20 s.
+A run with `--fit-n` is labelled "reproduced on a subsample" in `notes`.

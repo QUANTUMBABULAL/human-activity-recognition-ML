@@ -4,6 +4,7 @@ All data here is synthetic (har/synthetic.py): accuracy checks are smoke checks 
 nothing about PAMAP2 results.
 """
 import importlib
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -17,12 +18,15 @@ from har.data import get_xy
 from har.metrics import REQUIRED_KEYS
 from har.models_p2 import adaboost as ab
 from har.models_p2 import decision_tree as dt
+from har.models_p2 import mlp
 from har.models_p2 import random_forest as rf
 from har.runner import run_experiment
 from har.splits import make_random_split
 from har.synthetic import fake_processed_df
 
 ROOT = Path(__file__).resolve().parents[1]
+needs_tf = pytest.mark.skipif(importlib.util.find_spec("tensorflow") is None,
+                              reason="TensorFlow not installed (MLP is P2-only)")
 
 
 @pytest.fixture(scope="module")
@@ -359,3 +363,132 @@ def test_adaboost_smoke_flag_never_writes_to_results():
     a = script.parse_args(["--smoke"])
     assert Path(a.results_dir).resolve() != (ROOT / "results").resolve()
     assert a.tag == "_smoke" and a.fit_n and a.test_n and a.tune_n
+
+
+# ---------------------------------------------------------------- MLP (E7)
+
+TINY = {"epochs": 3, "batch_size": 64, "val_frac": 0.2}
+
+
+def test_mlp_instantiates_with_paper_architecture():
+    m = mlp.build()
+    cfg = m.get_config()
+    assert cfg["hidden_units"] == [512, 512] and cfg["dropout"] == 0.5 and cfg["activation"] == "relu"
+    assert cfg["output_units"] == 12 and cfg["output_activation"] == "softmax"
+    assert cfg["loss"] == "categorical_crossentropy" and cfg["optimizer"] == "SGD"
+    assert cfg["epochs"] == 100 and cfg["seed"] == 229
+    assert set(mlp.PAPER_TEST_ACC) == {"full", "reduced"}
+
+
+def test_mlp_label_encoding_round_trip():
+    assert list(mlp.encode_labels(LABEL_ORDER)) == list(range(12))
+    assert list(mlp.decode_labels(range(12))) == LABEL_ORDER
+    y = np.array([24, 1, 12, 7, 17, 13, 16, 2])
+    np.testing.assert_array_equal(mlp.decode_labels(mlp.encode_labels(y)), y)
+    for bad in ([0], [8], [25]):                               # transient / unused / unknown IDs
+        with pytest.raises(ValueError):
+            mlp.encode_labels(bad)
+
+
+def test_mlp_predict_decodes_softmax_index_to_original_id():
+    """argmax index i must come back as LABEL_ORDER[i], never as i."""
+    m = mlp.build()
+    m.predict_proba = lambda X: np.eye(12)[np.arange(len(X)) % 12]
+    np.testing.assert_array_equal(m.predict(np.zeros((24, 11))), np.tile(LABEL_ORDER, 2))
+
+
+@needs_tf
+@pytest.mark.parametrize("d", [11, 31])
+def test_mlp_network_shape(d):
+    net = mlp.build().build_network(d)
+    assert net.input_shape == (None, d) and net.output_shape == (None, 12)
+    kinds = [(type(l).__name__, getattr(l, "units", None), getattr(l, "rate", None)) for l in net.layers]
+    assert kinds == [("Dense", 512, None), ("Dropout", None, 0.5), ("Dense", 512, None),
+                     ("Dropout", None, 0.5), ("Dense", 12, None)]
+    assert [l.activation.__name__ for l in net.layers if type(l).__name__ == "Dense"] == ["relu", "relu", "softmax"]
+
+
+@needs_tf
+@pytest.mark.parametrize("fs", ["reduced", "full"])
+def test_mlp_fit_predict(fs, fake):
+    df, s = fake
+    X_tr, y_tr = get_xy(df, fs, s["train"])
+    X_te, y_te = get_xy(df, fs, s["test"])
+    m = mlp.build(**TINY).fit(X_tr, y_tr)
+    assert m.scaler_.n_features_in_ == len(FEATURE_SETS[fs]) == {"reduced": 11, "full": 31}[fs]
+    pred = m.predict(X_te)
+    assert pred.shape == y_te.shape and pred.dtype == np.int64
+    assert set(np.unique(pred)) <= set(LABEL_ORDER)          # real activity IDs, not 0..11
+    assert m.predict_proba(X_te).shape == (len(X_te), 12)
+    assert m.n_fit_rows_ + m.n_val_rows_ == len(X_tr) and m.n_val_rows_ == round(0.2 * len(X_tr))
+    info = mlp.mlp_info(m)
+    assert info["epochs_run"] == 3 and len(m.history_["val_loss"]) == 3
+
+
+@needs_tf
+def test_mlp_scaler_fit_only_on_fitting_rows_and_never_refit_in_predict(fake):
+    df, s = fake
+    X_tr, y_tr = get_xy(df, "full", s["train"])
+    X_te, _ = get_xy(df, "full", s["test"])
+    m = mlp.build(**TINY).fit(X_tr, y_tr)
+    fit_pos, val_pos = m._split_validation(len(X_tr))
+    assert len(val_pos) and not set(fit_pos) & set(val_pos)
+    np.testing.assert_allclose(m.scaler_.mean_, X_tr[fit_pos].mean(axis=0, dtype=np.float64), rtol=1e-5)
+    assert m.scaler_.n_samples_seen_ == len(fit_pos)         # validation rows not in the scaler
+    mean, scale = m.scaler_.mean_.copy(), m.scaler_.scale_.copy()
+
+    def boom(*_a, **_k):
+        raise AssertionError("scaler refit during predict")
+    m.scaler_.fit = m.scaler_.fit_transform = m.scaler_.partial_fit = boom
+    m.predict(X_te + 1000.0)                                  # wildly shifted "test" data
+    np.testing.assert_array_equal(m.scaler_.mean_, mean)
+    np.testing.assert_array_equal(m.scaler_.scale_, scale)
+
+
+@needs_tf
+def test_mlp_is_deterministic_on_this_machine(fake):
+    """Same seed + op determinism -> same predictions (CPU; other hardware may differ)."""
+    df, s = fake
+    X_tr, y_tr = get_xy(df, "reduced", s["train"])
+    X_te, _ = get_xy(df, "reduced", s["test"])
+    p1 = mlp.build(**TINY).fit(X_tr, y_tr).predict_proba(X_te)
+    p2 = mlp.build(**TINY).fit(X_tr, y_tr).predict_proba(X_te)
+    np.testing.assert_array_equal(p1, p2)
+
+
+@needs_tf
+def test_mlp_runner_integration(fake, tmp_path):
+    df, s = fake
+    m = mlp.build(**TINY)
+    rec = run_experiment(model_name="mlp", owner="P2", model=m, df=df, split=s, feature_set="full",
+                         params=m.get_config(), results_dir=tmp_path, post_fit=mlp.mlp_info)
+    data = json.loads((tmp_path / "metrics" / "mlp_full.json").read_text())
+    assert REQUIRED_KEYS <= data.keys() and data["owner"] == "P2"
+    assert {"test_weighted_f1", "epochs_run", "n_fit_rows", "n_val_rows", "best_val_loss_epoch"} <= data.keys()
+    assert data["params"]["batch_size"] == 64 and "tensorflow" in data["versions"]
+    assert data["n_train"] == len(s["train"]) and data["n_test"] == len(s["test"])
+    cm = pd.read_csv(tmp_path / "confusion" / "mlp_full.csv", index_col=0)
+    assert cm.shape == (12, 12) and cm.to_numpy().sum() == data["n_test"]
+    assert rec["test_accuracy"] == data["test_accuracy"]
+
+
+@needs_tf
+@pytest.mark.parametrize("fs", ["reduced", "full"])
+def test_mlp_experiment_script_end_to_end(fs, fake, tmp_path):
+    from experiments.p2 import run_mlp as script
+    df, s = fake
+    a = script.parse_args(["--feature-set", fs, "--epochs", "2", "--batch-size", "64", "--verbose", "0",
+                           "--results-dir", str(tmp_path)])
+    script.run_feature_set(a, df, s, fs)
+    data = json.loads((tmp_path / "metrics" / f"mlp_{fs}.json").read_text())
+    assert data["feature_set"] == fs and data["epochs_run"] == 2 and data["params"]["epochs"] == 2
+    assert "SMOKE" not in data["notes"] and "validation" in data["notes"]
+    hist = pd.read_csv(tmp_path / "metrics" / f"mlp_{fs}_history.csv")
+    assert list(hist["epoch"]) == [1, 2] and {"loss", "val_loss", "accuracy", "val_accuracy"} <= set(hist)
+
+
+def test_mlp_smoke_flag_never_writes_to_results():
+    from experiments.p2 import run_mlp as script
+    a = script.parse_args(["--smoke"])
+    assert Path(a.results_dir).resolve() != (ROOT / "results").resolve()
+    assert a.tag == "_smoke" and a.fit_n and a.test_n and a.epochs == 2
