@@ -1,0 +1,112 @@
+{
+  "hr_method": "linear",
+  "files": [
+    "subject101.dat",
+    "subject102.dat",
+    "subject103.dat",
+    "subject104.dat",
+    "subject105.dat",
+    "subject106.dat",
+    "subject107.dat",
+    "subject108.dat",
+    "subject109.dat"
+  ],
+  "subjects": [
+    {
+      "subject_id": 101,
+      "rows_raw": 376417,
+      "hr_nan_frac_raw": 0.9086412143978619,
+      "rows_label0": 126460,
+      "rows_after_label_filter": 249957,
+      "rows_dropped_nan": 2749,
+      "rows_clean": 247208
+    },
+    {
+      "subject_id": 102,
+      "rows_raw": 447000,
+      "hr_nan_frac_raw": 0.9087360178970917,
+      "rows_label0": 183651,
+      "rows_after_label_filter": 263349,
+      "rows_dropped_nan": 4221,
+      "rows_clean": 259128
+    },
+    {
+      "subject_id": 103,
+      "rows_raw": 252833,
+      "hr_nan_frac_raw": 0.90865116499824,
+      "rows_label0": 78495,
+      "rows_after_label_filter": 174338,
+      "rows_dropped_nan": 997,
+      "rows_clean": 173341
+    },
+    {
+      "subject_id": 104,
+      "rows_raw": 329576,
+      "hr_nan_frac_raw": 0.9086250212394107,
+      "rows_label0": 98155,
+      "rows_after_label_filter": 231421,
+      "rows_dropped_nan": 3037,
+      "rows_clean": 228384
+    },
+    {
+      "subject_id": 105,
+      "rows_raw": 374783,
+      "hr_nan_frac_raw": 0.9086858261980933,
+      "rows_label0": 102341,
+      "rows_after_label_filter": 272442,
+      "rows_dropped_nan": 3131,
+      "rows_clean": 269311
+    },
+    {
+      "subject_id": 106,
+      "rows_raw": 361817,
+      "hr_nan_frac_raw": 0.9086582443610997,
+      "rows_label0": 111721,
+      "rows_after_label_filter": 250096,
+      "rows_dropped_nan": 2016,
+      "rows_clean": 248080
+    },
+    {
+      "subject_id": 107,
+      "rows_raw": 313599,
+      "hr_nan_frac_raw": 0.908654045452951,
+      "rows_label0": 80823,
+      "rows_after_label_filter": 232776,
+      "rows_dropped_nan": 2409,
+      "rows_clean": 230367
+    },
+    {
+      "subject_id": 108,
+      "rows_raw": 408031,
+      "hr_nan_frac_raw": 0.9088819231872088,
+      "rows_label0": 145929,
+      "rows_after_label_filter": 262102,
+      "rows_dropped_nan": 2887,
+      "rows_clean": 259215
+    },
+    {
+      "subject_id": 109,
+      "rows_raw": 8477,
+      "hr_nan_frac_raw": 0.9084581809602453,
+      "rows_label0": 2086,
+      "rows_after_label_filter": 6391,
+      "rows_dropped_nan": 5,
+      "rows_clean": 6386
+    }
+  ],
+  "rows_total": 1921420,
+  "class_counts": {
+    "1": 192290,
+    "2": 184645,
+    "3": 188984,
+    "4": 229709,
+    "5": 95630,
+    "6": 163302,
+    "7": 184444,
+    "12": 117094,
+    "13": 104865,
+    "16": 174976,
+    "17": 237902,
+    "24": 47579
+  }
+}

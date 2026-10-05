@@ -141,4 +141,7 @@ Fill in one row per decision as runs happen (continue P1's numbering style with 
 | ID | Topic | Paper / source says | We do | Why / likely effect |
 |---|---|---|---|---|
 | P2-01 | Infrastructure | n/a | Reuse P1's `get_xy`, `load_split`, `run_experiment`, `save_result` unchanged | One split and one metrics format for both people |
+| P2-02 | DT depth selection | Gini, depth 15 by the "one-standard-deviation rule" | 5-fold CV over `DEPTH_GRID` = {2,4,6,8,10,12,15,18,20,25,30}; shallowest depth within 1 SD of the best mean val. accuracy (`--rule one_sd`, default). Max-val depth also stored as `cv.best_by_max_val` | Paper rule; the grid range is our choice (report does not give one) |
+| P2-03 | DT tuning size | Report does not state | CV on 200k training rows (`--tune-n`), final fit on all 1,633,207 training rows | Compute; actual rows logged in JSON (`cv.tune_rows`, `n_train`) |
+| P2-04 | DT other settings | Not stated | `min_samples_leaf=1`, no pruning, no class weights, `random_state=229`, raw (unscaled) features | sklearn defaults; trees are scale-invariant |
 | | | | | |
