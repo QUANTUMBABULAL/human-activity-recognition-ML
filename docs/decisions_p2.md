@@ -8,7 +8,7 @@ decisions/deviations table, filled in as real runs happen.
 
 | Owner | Files |
 |---|---|
-| **P2** | `har/models_p2/*`, `experiments/p2/*`, `experiments/compare_results.py`, `tests/test_p2_models.py`, `docs/decisions_p2.md` |
+| **P2** | `har/models_p2/*`, `experiments/p2/*`, `experiments/compare_results.py`, `tests/test_p2_models.py`, `tests/test_compare_results.py`, `docs/decisions_p2.md` |
 | P1 (frozen, read-only for P2) | `har/{config,metrics,runner,synthetic,plots}.py` |
 | P1 (used, not changed) | `har/{data,splits}.py`, `data/processed/*`, `results/split_meta.json` |
 
@@ -158,11 +158,14 @@ Fill in one row per decision as runs happen (continue P1's numbering style with 
 | P2-16 | MLP scaling | Not stated for the MLP | `StandardScaler` fitted inside `KerasMLP.fit` on the fitting rows only (not the validation slice, never test); `predict` only calls `transform` | No leakage; tested (scaler mean == fitting-row mean, `n_samples_seen_` == fitting rows, predict on shifted data with `fit` patched to raise) |
 | P2-17 | MLP labels | n/a | Fixed map from `LABEL_ORDER`: ID -> position 0..11 -> one-hot; prediction = `LABEL_ORDER[argmax]`. Unknown IDs (e.g. 0) raise. Output layer always has 12 units, even if a subsample lacks a class | Runner/metrics index by original IDs; tested that softmax index i decodes to `LABEL_ORDER[i]` |
 | P2-18 | MLP reproducibility | n/a | `keras.utils.set_random_seed(229)` (Python, NumPy, TF) at the start of every `fit`, `Dropout(seed=229)`, and `tf.config.experimental.enable_op_determinism()` (process-wide). Same machine + versions (TF 2.21.0, Keras 3.15.1, CPU) -> bit-identical probabilities (tested) | Not guaranteed across machines, CPU instruction sets, thread counts or TF/oneDNN versions. TF on native Windows has no GPU support, so runs are CPU only |
+| P2-19 | AdaBoost final selection rule | Chosen 500 trees / depth 10 (reduced), 250 / depth 9 (full); selection method not stated | Final real-data runs use `--rule one_sd`. The CV grid (depth {6,8,9,10,12} x trees {50,100,250,500}, 5 folds, 100k training rows) is unchanged. One-SD picks the cheapest config (fewest trees, then shallowest) whose mean val. accuracy is within one SD of the best. Selection uses CV on training rows only. `cv.best_by_max_val` still records the max-rule pick. Decided 2026-10-05, before any AdaBoost test evaluation | CV differences inside one SD are noise. Without this rule, noise could select a much more expensive config (e.g. 500 trees / depth 12 on `full`, final fit roughly 11 h, section 11) for no real gain. Same principle as the paper's DT rule (P2-02). Differs from RF's `max` rule (P2-05), where the tree count is fixed and cost is not the issue. SAMME instead of SAMME.R remains an unavoidable sklearn API deviation (P2-08) |
+| P2-20 | MLP batch size / learning rate: pre-declared fallback | Paper states SGD only; no batch size or learning rate (P2-14) | Default plan: batch 32, learning rate 0.01, 100 epochs (P2-14/15). Before the final MLP runs, time one epoch on the training rows (no test evaluation). If the timing implies that 100 epochs would exceed **about 10 h per feature set**, both sets use the fallback: **batch 256, learning rate 0.08**, same architecture, same 100 epochs unless the timing/implementation requires otherwise. The fallback is a **computational deviation**. If used, it is recorded automatically in the result JSON's `params` (`batch_size`, `learning_rate`) and must be written here as a dated row with the measured epoch time. Decided 2026-10-05, before any MLP test evaluation | The trigger is runtime only, never test performance. Batch 256 at learning rate 0.01 would make 8x fewer updates (574,200 vs 4,593,400 over 100 epochs), roughly the progress of ~12-13 batch-32 epochs, so "100 epochs" would no longer mean the same training. Scaling the learning rate with the batch (x8 -> 0.08, a heuristic) keeps progress per epoch comparable. Gradient noise drops ~8x (less implicit regularisation). Both values remain our assumptions, not paper values |
 | | | | | |
 
 ## 11. AdaBoost compute notes
 
-Probe on real training rows (2026-10-05, this machine, 8 cores, one weighted tree, single thread):
+Probe on real training rows (2026-10-05, this machine: Intel i5-1035G1, 15 W, 4 physical cores / 8 logical
+threads; one weighted tree, single thread):
 
 | Set / depth | 200k rows | 1,633,207 rows |
 |---|---|---|
@@ -172,9 +175,14 @@ Probe on real training rows (2026-10-05, this machine, 8 cores, one weighted tre
 Extrapolations only (assumed linear scaling; not measured end to end):
 
 - final fit at the paper configs: reduced 500 trees, about 3 h; full 250 trees, about 4 h. If CV picks 500 trees
-  for `full`, about 8 h. Trees are fitted sequentially, so `--n-jobs` does not help here.
-- CV at the defaults (100k rows, 80k per training fold, 5 folds in parallel): roughly 45 min (reduced) and
-  2 h (full) for the 5-depth grid.
+  for `full`, about 8 h. If CV picks 500 trees at depth 12 for `full`, roughly 11 h (assumes cost grows
+  linearly with depth: 59 s x 12/9 per tree). Trees are fitted sequentially, so `--n-jobs` does not help here.
+- CV at the defaults (100k rows, 80k per training fold, 5 folds in parallel): roughly **1-1.5 h (reduced)** and
+  **2.5-3.5 h (full)** for the 5-depth grid. Corrected 2026-10-05: an earlier estimate (45 min / 2 h) assumed
+  5x speed-up from 5 parallel folds, but this machine has 4 physical cores. CV fits 12,500 trees on 80k rows per
+  set, about as much total work as a 500-tree final fit on all rows.
+- The probe timed single short fits at boost clock. Multi-hour runs on this 15 W CPU are likely to throttle, so
+  all estimates here are lower bounds rather than expected values.
 - Memory is small: depth <= 12 trees have <= 8191 nodes each.
 
 Run one feature set at a time. If a full fit is not feasible, use `--fit-n` and report the result as "reproduced on
@@ -192,11 +200,82 @@ Probe on real training rows (2026-10-05, this machine, CPU only, 1 epoch on 300k
 Extrapolations only (linear in rows; per-epoch validation and the final predict add a little; probe timings are
 noisy, e.g. the first fit includes TF warm-up):
 
-- 100 epochs on 1,469,886 fitting rows at batch 32: about **6 h (full)** and **4 h (reduced)**, so about 10 h for
-  `--feature-set both`.
+- 100 epochs on 1,469,886 fitting rows at batch 32: the linear extrapolation gives about **6 h (full)** and
+  **4 h (reduced)**. The gap is probably a probe artifact (the full-set fit ran first and included TF warm-up).
+  Reduced and full use the **same rows** (D-03: 1,469,886 fitting + 163,321 validation rows) and almost the
+  **same parameter count**: 274,956 vs 285,196 (+3.7%, first layer only; the 512x512 layer, 262,656 parameters,
+  dominates). So **both sets are expected to take similar time**, roughly 4-6 h each, about 8-12 h for
+  `--feature-set both`, before validation overhead and throttling.
+- Updates: batch 32 -> 45,934 per epoch, 4,593,400 over 100 epochs; batch 256 -> 5,742 per epoch, 574,200 total.
+  Batch 32 is slow because per-step overhead dominates the arithmetic: measured ~4.65 ms/step and ~6.9k samples/s
+  (full), against ~9.1 ms/step and ~28k samples/s at batch 256.
+- **Validation uses the training batch size**: `KerasMLP.fit` passes no `validation_batch_size`, so Keras
+  evaluates the 163,321-row validation slice at batch 32, i.e. 5,104 forward-only steps after every epoch (638 at
+  batch 256). The probe above ran without validation. Inference: this adds roughly 10-20% per epoch at batch 32.
+- The one-epoch timing check and fallback rule before the final runs are in P2-20.
 - At `--batch-size 256` about 1.5-2 h per set, but that is a deviation from P2-14 and changes the optimisation
   (8x fewer SGD updates per epoch at the same learning rate), so it must be logged as such.
 - Memory: about 0.5 GB for the full-set arrays (X, scaled X, one-hot Y); the network is about 1 MB.
 
 Smoke run (`--smoke`: real data and frozen split, 20k fit rows, 5k test rows, 2 epochs, temp dir) takes about 20 s.
 A run with `--fit-n` is labelled "reproduced on a subsample" in `notes`.
+
+## 13. Final comparison (`experiments/compare_results.py`)
+
+```
+python -m experiments.compare_results                    # prints, writes results/comparison.csv
+python -m experiments.compare_results --no-write         # print only
+python -m experiments.compare_results --results-dir DIR  # another results tree (tests use temp dirs)
+```
+
+**What it reads.** Only `results/metrics/*.json` written by `har.metrics.save_result`, plus
+`results/split_meta.json` for the frozen split's row counts. It never loads PAMAP2, never imports
+TensorFlow and never fits a model. Model and feature set come from the JSON's own `model` /
+`feature_set` fields. The file stem `<model>_<feature_set>` is the **primary** result for that
+pair. A tagged stem such as `svm_rbf_full_stageC` is listed as an "extra run" and is not ranked.
+`*_cv.csv`, `*_history.csv` and other non-JSON files are ignored.
+
+**Expected grid.** 6 models (`logreg`, `svm_rbf`, `decision_tree`, `random_forest`, `adaboost`,
+`mlp`) x 2 feature sets (`reduced`, `full`) = 12 rows, always printed.
+
+**Status of each row.**
+
+| Status | Rule | Used in |
+|---|---|---|
+| FULL | `n_train` >= 1,633,207 and `n_test` >= 288,213 (counts read from `split_meta.json`) | table, both rankings, full-vs-reduced, gap vs paper |
+| SUBSAMPLE | fewer training or test rows (e.g. SVM Stage A fits 50k rows, or any `--fit-n` / `--test-n` run) | table, the "all non-smoke" ranking only; labelled "reproduced on a subsample" |
+| UNVERIFIED | `split_meta.json` missing or row counts missing, so FULL cannot be checked | as SUBSAMPLE; never counted as FULL |
+| SMOKE | tag contains `smoke` or notes start with `SMOKE TEST` | **nothing**: listed under "Excluded SMOKE result files" only, not in the CSV |
+| MALFORMED | invalid JSON, not an object, or missing a `REQUIRED_KEYS` field | listed under "Problems"; the pair shows MALFORMED with no metrics |
+| NOT RUN | no usable primary file for the pair | table and CSV with empty metric cells |
+
+The MLP holds out 10% of the training rows for validation inside `fit` (P2-15). Its `n_train` is
+still the full training count, so it can be FULL; `n_fit_rows` in its JSON gives the exact number.
+
+**Missing values.** A missing, `null`, non-numeric or NaN metric stays missing: `-` in the
+terminal, an empty cell in the CSV. It is never 0, never ranked and never used in a difference.
+`comparison.csv` is not written when there is no FULL / SUBSAMPLE / UNVERIFIED result, so no file
+with only placeholders appears in `results/`.
+
+**Rankings.** Accuracy, macro F1 and weighted F1 are ranked separately, highest first, using
+competition ranking (1, 1, 3). Ranks use the stored full-precision values and ties are marked
+`=`. Two pools are printed: FULL-data runs only, then all non-smoke runs with each row's status.
+Only primary rows of the main protocol (`random_85_15`) are ranked.
+
+**Full vs reduced.** For each model, `full - reduced` is shown for the three metrics only when
+both primary results exist. The basis column says "both FULL" or names the statuses (then it is
+not a full-data comparison). The one-line summary ("full is better for k of m models") counts
+only "both FULL" models. With no such pair it says that no claim can be made.
+
+**Timing.** `fit_seconds` / `predict_seconds` come from `run_experiment` (wall clock, this machine,
+on the rows actually used). They are shown with `n_train` / `n_test` because SUBSAMPLE timings
+are not comparable to full-data timings. Smoke timings never appear.
+
+**Paper vs ours.** Paper numbers are the report-text test accuracies in each model module's
+`PAPER_TEST_ACC` (copied from `docs/paper_numbers.md`; MLP reduced = 81.4 text, 84.0 in Figure 2
+is noted). They appear only in two separately titled sections: "PAPER REFERENCE ... (NOT our
+results)" and "OURS vs PAPER", whose columns are prefixed `PAPER` / `OURS`. The paper gives no
+F1 or timing values, so none are shown. `comparison.csv` contains our results only.
+
+Tests: `tests/test_compare_results.py` uses hand-made JSON fixtures in temp directories (written
+with `save_result` so the format is real). Their numbers are test inputs, never results.
