@@ -147,4 +147,29 @@ Fill in one row per decision as runs happen (continue P1's numbering style with 
 | P2-05 | RF tuning | 100 trees, sqrt features, max depth 20 (selection method not stated) | 5-fold CV over `max_depth` in {10,15,20,25,30} at 100 trees, sqrt features; highest mean val. accuracy (`--rule max`). `--trees-grid 50 100 200` widens the search if time allows | Checks the paper's depth instead of assuming it; tree count kept at the paper value by default for compute |
 | P2-06 | RF tuning size | Not stated | CV on 200k training rows (`--tune-n`), final fit on all 1,633,207 training rows | Probe (10 trees, 400k rows): 2-6 MB per tree, so 100 trees on full data is roughly 1-1.5 GB (extrapolated). CV folds run sequentially to keep only one forest in memory |
 | P2-07 | RF determinism | n/a | `random_state=229`, `bootstrap=True`; trees and predictions identical for any `n_jobs`; `predict_proba` can differ by ~1e-16 between `n_jobs` values (threaded summation order) | Verified in `tests/test_p2_models.py` |
+| P2-08 | AdaBoost API / algorithm | "default learning rate" (2018 sklearn: `base_estimator=`, default `algorithm="SAMME.R"`) | sklearn 1.9.1 `AdaBoostClassifier(estimator=DecisionTreeClassifier(criterion="gini", max_depth=d, random_state=229), n_estimators=n, learning_rate=1.0, random_state=229)`. Discrete **SAMME** only | `base_estimator` was removed in sklearn 1.4 and `algorithm`/SAMME.R in 1.6, so the paper's likely SAMME.R cannot be reproduced on the installed version. SAMME uses hard tree votes rather than class probabilities, which may change accuracy relative to the paper (effect unknown until run) |
+| P2-09 | AdaBoost tuning | Chosen 500 trees / depth 10 (reduced), 250 trees / depth 9 (full); selection method not stated | 5-fold CV over `max_depth` in {6,8,9,10,12} x `n_estimators` in {50,100,250,500}, `learning_rate` fixed at 1.0; highest mean val. accuracy (`--rule max`, same as RF); `--rule one_sd` picks the fewest trees then shallowest within 1 SD. Paper configs are in the grid and stay available via `--skip-tune` (logged as "paper value") | Checks the paper's choice instead of assuming it is optimal. CV may pick a different config per feature set; whatever it picks is reported, not overridden |
+| P2-10 | AdaBoost CV implementation | n/a | One 500-tree fit per (depth, fold); counts 50/100/250 are scored with `staged_predict`. Folds run in parallel (`--n-jobs`); AdaBoost itself has no `n_jobs` | The first k trees of an n-tree AdaBoost fit are exactly a k-tree fit (same seeded RNG sequence), checked in `test_adaboost_staged_scores_match_a_fresh_smaller_fit`. Cuts CV cost about 4x versus refitting each count |
+| P2-11 | AdaBoost tuning size | Not stated | CV on **100k** training rows (`--tune-n`, half the DT/RF default), final fit on all 1,633,207 training rows | Compute (see section 11). Actual rows logged in JSON (`cv.tune_rows`, `n_train`) |
+| P2-12 | AdaBoost early stopping / determinism | n/a | sklearn stops boosting if a tree has zero weighted error (or is no better than chance). The JSON records `n_trees_fitted`, `stopped_early` and `last_estimator_error`. `random_state=229` gives identical trees and predictions on reruns | So a "500-tree" result that actually used fewer trees is visible. Determinism checked in `tests/test_p2_models.py` |
 | | | | | |
+
+## 11. AdaBoost compute notes
+
+Probe on real training rows (2026-10-05, this machine, 8 cores, one weighted tree, single thread):
+
+| Set / depth | 200k rows | 1,633,207 rows |
+|---|---|---|
+| reduced / 10 | 2.6 s | 22.5 s |
+| full / 9 | 6.8 s | 59.0 s |
+
+Extrapolations only (assumed linear scaling; not measured end to end):
+
+- final fit at the paper configs: reduced 500 trees, about 3 h; full 250 trees, about 4 h. If CV picks 500 trees
+  for `full`, about 8 h. Trees are fitted sequentially, so `--n-jobs` does not help here.
+- CV at the defaults (100k rows, 80k per training fold, 5 folds in parallel): roughly 45 min (reduced) and
+  2 h (full) for the 5-depth grid.
+- Memory is small: depth <= 12 trees have <= 8191 nodes each.
+
+Run one feature set at a time. If a full fit is not feasible, use `--fit-n` and report the result as "reproduced on
+a subsample". Smoke run (`--smoke`, 3k CV rows, 10k fit rows, 5k test rows, temp dir) takes about 30 s.

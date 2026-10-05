@@ -15,6 +15,7 @@ import pytest
 from har.config import FEATURE_SETS, LABEL_ORDER
 from har.data import get_xy
 from har.metrics import REQUIRED_KEYS
+from har.models_p2 import adaboost as ab
 from har.models_p2 import decision_tree as dt
 from har.models_p2 import random_forest as rf
 from har.runner import run_experiment
@@ -233,6 +234,128 @@ def test_random_forest_experiment_script_end_to_end(fs, fake, tmp_path):
 
 def test_random_forest_smoke_flag_never_writes_to_results():
     from experiments.p2 import run_random_forest as script
+    a = script.parse_args(["--smoke"])
+    assert Path(a.results_dir).resolve() != (ROOT / "results").resolve()
+    assert a.tag == "_smoke" and a.fit_n and a.test_n and a.tune_n
+
+
+# ---------------------------------------------------------------- AdaBoost (E6)
+
+def test_adaboost_build_uses_explicit_tree_and_paper_configs():
+    for fs, (n, d) in {"reduced": (500, 10), "full": (250, 9)}.items():
+        m = ab.build_paper(fs)
+        assert (m.n_estimators, m.estimator.max_depth, m.learning_rate) == (n, d, 1.0)
+        assert type(m.estimator).__name__ == "DecisionTreeClassifier" and m.estimator.criterion == "gini"
+        assert m.random_state is not None
+    assert set(ab.PAPER) == set(ab.PAPER_TEST_ACC) == {"full", "reduced"}
+
+
+@pytest.mark.parametrize("fs", ["reduced", "full"])
+def test_adaboost_fit_predict(fs, fake):
+    df, s = fake
+    X_tr, y_tr = get_xy(df, fs, s["train"])
+    X_te, y_te = get_xy(df, fs, s["test"])
+    m = ab.build(n_estimators=20, max_depth=3).fit(X_tr, y_tr)
+    assert m.n_features_in_ == len(FEATURE_SETS[fs]) == {"reduced": 11, "full": 31}[fs]
+    pred = m.predict(X_te)
+    assert pred.shape == y_te.shape
+    assert set(np.unique(pred)) <= set(LABEL_ORDER)          # real activity IDs, not 0..11
+    assert list(m.classes_) == LABEL_ORDER
+    assert (pred == y_te).mean() > 3 / len(LABEL_ORDER)      # smoke check on separable fake data
+    info = ab.boost_info(m)
+    assert 1 <= info["n_trees_fitted"] <= 20 and info["max_tree_depth"] <= 3
+    assert info["stopped_early"] == (info["n_trees_fitted"] < 20)
+
+
+def test_adaboost_is_deterministic(fake):
+    df, s = fake
+    X_tr, y_tr = get_xy(df, "full", s["train"])
+    X_te, _ = get_xy(df, "full", s["test"])
+    m1 = ab.build(15, 3).fit(X_tr, y_tr)
+    m2 = ab.build(15, 3).fit(X_tr, y_tr)
+    np.testing.assert_array_equal(m1.estimator_weights_, m2.estimator_weights_)
+    np.testing.assert_array_equal(m1.predict(X_te), m2.predict(X_te))
+
+
+def test_adaboost_staged_scores_match_a_fresh_smaller_fit(fake):
+    """cv_grid relies on this: the first k trees of an n-tree fit == a k-tree fit."""
+    df, s = fake
+    X_tr, y_tr = get_xy(df, "reduced", s["train"])
+    X_te, y_te = get_xy(df, "reduced", s["test"])
+    big = ab.build(20, 2).fit(X_tr, y_tr)
+    small = ab.build(8, 2).fit(X_tr, y_tr)
+    assert len(big.estimators_) == 20                        # no early stop, so the check is meaningful
+    staged = list(big.staged_predict(X_te))[7]
+    np.testing.assert_array_equal(staged, small.predict(X_te))
+    acc = ab.staged_accuracy(big, X_te, y_te, [8, 20, 50])   # 50 > fitted -> final ensemble's accuracy
+    assert acc[8] == (small.predict(X_te) == y_te).mean()
+    assert acc[50] == acc[20] == (big.predict(X_te) == y_te).mean()
+
+
+def test_adaboost_cv_grid_table(fake):
+    df, s = fake
+    X, y = get_xy(df, "reduced", s["train"])
+    rows = ab.cv_grid(X[:800], y[:800], depth_grid=[2, 4], n_estimators_grid=[10, 5], n_jobs=1)
+    assert [(r["n_estimators"], r["max_depth"]) for r in rows] == [(5, 2), (10, 2), (5, 4), (10, 4)]
+    assert all({"max_depth", "n_estimators", "train_mean", "val_mean", "val_std",
+                "min_trees_fitted"} <= r.keys() for r in rows)
+    assert all(0 <= r["val_mean"] <= 1 and r["val_std"] >= 0 for r in rows)
+    assert ab.select_config(rows) in rows
+
+
+def test_adaboost_select_config_rules():
+    rows = [{"n_estimators": 250, "max_depth": 6, "val_mean": 0.80, "val_std": 0.01},
+            {"n_estimators": 250, "max_depth": 10, "val_mean": 0.895, "val_std": 0.01},
+            {"n_estimators": 500, "max_depth": 10, "val_mean": 0.90, "val_std": 0.01},
+            {"n_estimators": 500, "max_depth": 12, "val_mean": 0.899, "val_std": 0.01}]
+    assert ab.select_config(rows, "max") == rows[2]
+    assert ab.select_config(rows, "one_sd") == rows[1]          # fewest trees, then shallowest
+    with pytest.raises(ValueError):
+        ab.select_config(rows, "median")
+
+
+@pytest.mark.parametrize("fs", ["reduced", "full"])
+def test_adaboost_experiment_script_end_to_end(fs, fake, tmp_path):
+    """Script logic on fake data: CV on training rows -> run_experiment -> JSON + confusion CSV."""
+    from experiments.p2 import run_adaboost as script
+    df, s = fake
+    a = script.parse_args(["--feature-set", fs, "--tune-n", "800", "--depth-grid", "2", "3",
+                           "--trees-grid", "5", "10", "--n-jobs", "1", "--results-dir", str(tmp_path)])
+    rec = script.run_feature_set(a, df, s, fs)
+    data = json.loads((tmp_path / "metrics" / f"adaboost_{fs}.json").read_text())
+    assert REQUIRED_KEYS <= data.keys() and data["owner"] == "P2" and data["feature_set"] == fs
+    assert {"test_weighted_f1", "n_trees_fitted", "stopped_early", "mean_tree_depth"} <= data.keys()
+    assert data["params"]["algorithm"] == "SAMME" and data["params"]["learning_rate"] == 1.0
+    assert data["params"]["n_estimators"] in (5, 10) and data["params"]["max_depth"] in (2, 3)
+    assert data["cv"]["tune_rows"] == 800
+    assert data["n_train"] == len(s["train"]) and data["n_test"] == len(s["test"])
+    assert (tmp_path / "metrics" / f"adaboost_{fs}_cv.csv").exists()
+    cm = pd.read_csv(tmp_path / "confusion" / f"adaboost_{fs}.csv", index_col=0)
+    assert cm.shape == (12, 12) and cm.to_numpy().sum() == data["n_test"]
+    assert rec["test_accuracy"] == data["test_accuracy"]
+
+
+@pytest.mark.parametrize("fs", ["reduced", "full"])
+def test_adaboost_skip_tune_uses_per_feature_set_paper_config(fs, fake, tmp_path, monkeypatch):
+    """--skip-tune must pick 500/10 (reduced) or 250/9 (full); build is patched to stay fast."""
+    from experiments.p2 import run_adaboost as script
+    df, s = fake
+    seen = {}
+    real_build = ab.build
+
+    def small_build(n_estimators, max_depth, learning_rate=1.0):
+        seen.update(n_estimators=n_estimators, max_depth=max_depth)
+        return real_build(3, 2, learning_rate)
+
+    monkeypatch.setattr(script.ab, "build", small_build)
+    a = script.parse_args(["--feature-set", fs, "--skip-tune", "--results-dir", str(tmp_path)])
+    rec = script.run_feature_set(a, df, s, fs)
+    assert (seen["n_estimators"], seen["max_depth"]) == {"reduced": (500, 10), "full": (250, 9)}[fs]
+    assert rec["cv"]["rule"] == "paper value"
+
+
+def test_adaboost_smoke_flag_never_writes_to_results():
+    from experiments.p2 import run_adaboost as script
     a = script.parse_args(["--smoke"])
     assert Path(a.results_dir).resolve() != (ROOT / "results").resolve()
     assert a.tag == "_smoke" and a.fit_n and a.test_n and a.tune_n
