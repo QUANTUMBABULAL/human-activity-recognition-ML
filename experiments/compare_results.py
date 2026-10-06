@@ -6,7 +6,8 @@
 Reads only result JSON files written by har.metrics.save_result (never the dataset, never trains
 anything) and prints:
   1. OUR RESULTS: one row per non-smoke result file + one NOT RUN row per missing (model, feature set)
-  2. rankings by accuracy / macro F1 / weighted F1 (FULL-data runs, then all non-smoke runs)
+  2. rankings by accuracy / macro F1 / weighted F1 (FULL-data runs, then FULL / SUBSAMPLE runs,
+     then QUICK runs in a separate pool of their own)
   3. full (31) vs reduced (11) features per model, only where both results exist
   4. training / prediction time
   5. PAPER REFERENCE (Athens et al. 2018, report text) - a separate table, never our numbers
@@ -15,6 +16,10 @@ Writes results/comparison.csv (our results only; missing metrics are empty cells
 
 Status of a result file:
   SMOKE      tag "_smoke" or notes starting "SMOKE TEST" -> excluded from every table and ranking
+  QUICK      --quick run (JSON "status": "QUICK", tag "_quick" or notes starting "QUICK"): a fixed
+             reduced-compute educational preset (P2-21). Shown in the table and timings, ranked only
+             against other QUICK runs, never in FULL rankings, full-vs-reduced or OURS vs PAPER,
+             whatever its row counts
   FULL       n_train / n_test equal the frozen split's counts in results/split_meta.json
   SUBSAMPLE  fewer training or test rows than the frozen split ("reproduced on a subsample")
   UNVERIFIED split_meta.json missing, so FULL cannot be checked (never ranked as FULL)
@@ -51,6 +56,8 @@ CSV_COLUMNS = ["model", "model_name", "feature_set", "status", "stem", "primary"
                "test_accuracy", "test_macro_f1", "test_weighted_f1", "train_accuracy",
                "fit_seconds", "predict_seconds", "n_train", "n_test", "params", "notes", "source"]
 MISSING = "-"   # how a missing value is shown in the terminal (CSV: empty cell)
+QUICK_TAG = "_quick"
+NON_QUICK = ["FULL", "SUBSAMPLE", "UNVERIFIED"]
 
 
 # ----------------------------------------------------------------------------- loading
@@ -88,6 +95,9 @@ def load_split_counts(results_dir) -> dict | None:
 def classify(rec: dict, tag: str, split_counts: dict | None) -> str:
     if "smoke" in tag.lower() or str(rec.get("notes", "")).upper().startswith("SMOKE TEST"):
         return "SMOKE"
+    if (rec.get("status") == "QUICK" or "quick" in tag.lower()
+            or str(rec.get("notes", "")).upper().startswith("QUICK")):
+        return "QUICK"                      # checked BEFORE row counts: a quick run can use all rows
     if split_counts is None:
         return "UNVERIFIED"
     n_train, n_test = _num(rec.get("n_train")), _num(rec.get("n_test"))
@@ -120,9 +130,12 @@ def discover(results_dir=RESULTS_DIR):
         model, fs = str(rec["model"]), str(rec["feature_set"])
         prefix = f"{model}_{fs}"
         tag = stem[len(prefix):] if stem.startswith(prefix) else stem
+        status = classify(rec, tag, split_counts)
         rows.append({
             "model": model, "model_name": MODELS.get(model, model), "feature_set": fs,
-            "status": classify(rec, tag, split_counts), "stem": stem, "primary": stem == prefix,
+            "status": status, "stem": stem,
+            # primary = the canonical file of its mode: <model>_<fs> or, for QUICK, <model>_<fs>_quick
+            "primary": stem == prefix or (status == "QUICK" and tag == QUICK_TAG),
             "protocol": rec.get("protocol"),
             **{k: _num(rec.get(k)) for k in ("test_accuracy", "test_macro_f1", "test_weighted_f1",
                                              "train_accuracy", "fit_seconds", "predict_seconds")},
@@ -155,7 +168,7 @@ def build_table(rows, problems) -> pd.DataFrame:
 # ----------------------------------------------------------------------------- analysis
 
 def has_result(df: pd.DataFrame) -> pd.Series:
-    return df["status"].isin(["FULL", "SUBSAMPLE", "UNVERIFIED"])
+    return df["status"].isin(NON_QUICK + ["QUICK"])
 
 
 def rankable(df: pd.DataFrame, statuses) -> pd.DataFrame:
@@ -176,7 +189,7 @@ def rank(df: pd.DataFrame, metric: str) -> pd.DataFrame:
 
 def feature_set_comparison(df: pd.DataFrame) -> pd.DataFrame:
     """full - reduced per model, only when BOTH primary results exist (main protocol)."""
-    d = rankable(df, ["FULL", "SUBSAMPLE", "UNVERIFIED"])
+    d = rankable(df, NON_QUICK)               # QUICK never enters this comparison
     out = []
     for m in MODELS:
         r = d[(d["model"] == m) & (d["feature_set"] == "reduced")]
@@ -201,7 +214,7 @@ def paper_table(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                          "PAPER test accuracy": PAPER_TEST_ACC[m].get(fs),
                          "PAPER note": PAPER_NOTES.get((m, fs), "")}
                         for m in MODELS for fs in FEATURE_SETS])
-    ours = rankable(df, ["FULL", "SUBSAMPLE", "UNVERIFIED"])
+    ours = rankable(df, NON_QUICK)            # QUICK runs are not paper reproductions
     gap = []
     for _, r in ours.iterrows():
         p = PAPER_TEST_ACC.get(r["model"], {}).get(r["feature_set"])
@@ -247,6 +260,9 @@ def report(df: pd.DataFrame, rows, problems):
     print("OUR RESULTS (from results/metrics/*.json; metrics are fractions, times in seconds)")
     if real.empty:
         print("\nNo final experiment results found: no final experiments have been run yet.")
+    elif (real["status"] == "QUICK").all():
+        print("\nOnly QUICK (reduced-compute educational) results so far: no full-scale experiment has "
+              "been run yet.")
     main_cols = {"model_name": "Model", "feature_set": "Feature Set", "test_accuracy": "Accuracy",
                  "test_macro_f1": "Macro F1", "test_weighted_f1": "Weighted F1",
                  "fit_seconds": "Train Time (s)", "predict_seconds": "Predict Time (s)",
@@ -263,8 +279,9 @@ def report(df: pd.DataFrame, rows, problems):
               "they are excluded from rankings and comparisons.")
 
     for label, statuses in (("FULL-data runs only", ["FULL"]),
-                            ("all non-smoke runs (incl. SUBSAMPLE / UNVERIFIED)",
-                             ["FULL", "SUBSAMPLE", "UNVERIFIED"])):
+                            ("FULL + SUBSAMPLE / UNVERIFIED runs (no QUICK)", NON_QUICK),
+                            ("QUICK runs only (reduced-compute educational preset, NOT comparable to "
+                             "FULL)", ["QUICK"])):
         pool = rankable(df, statuses)
         for k, name in METRICS:
             r = rank(pool, k)
@@ -291,14 +308,15 @@ def report(df: pd.DataFrame, rows, problems):
     if not real.empty:
         tm = real.sort_values("fit_seconds", na_position="last")[
             ["model_name", "feature_set", "fit_seconds", "predict_seconds", "n_train", "n_test", "status"]]
-        _print("Training / prediction time - OURS (depends on machine and on rows used; compare "
-               "SUBSAMPLE timings with care)", tm,
+        _print("Training / prediction time - OURS (depends on machine, rows and preset used; compare "
+               "SUBSAMPLE and QUICK timings with care)", tm,
                {"fit_seconds": "seconds", "predict_seconds": "seconds", "n_train": "int", "n_test": "int"})
 
     ref, gap = paper_table(df)
     _print("PAPER REFERENCE - Athens et al. 2018, report-text test accuracy (NOT our results)", ref,
            {"PAPER test accuracy": "metric"})
     print("The paper reports accuracy only: no paper macro F1, weighted F1 or timings exist.")
+    print("QUICK results are never compared with the paper: they are not paper reproductions.")
     _print("OURS vs PAPER test accuracy (only where we have a result)", gap,
            {"OURS test accuracy": "metric", "PAPER test accuracy": "metric", "OURS - PAPER": "delta"})
 
@@ -306,6 +324,14 @@ def report(df: pd.DataFrame, rows, problems):
     print(f"\nMissing configurations (NOT RUN): {len(missing)} of {len(MODELS) * len(FEATURE_SETS)}")
     for _, r in missing.iterrows():
         print(f"  - {r['model_name']} / {r['feature_set']}")
+    prim = df[df["primary"].astype(bool)]
+    non_quick = set(zip(*[prim.loc[prim["status"].isin(NON_QUICK), c] for c in ("model", "feature_set")]))
+    quick_only = prim[(prim["status"] == "QUICK")
+                      & ~pd.Series(list(zip(prim["model"], prim["feature_set"])), index=prim.index).isin(non_quick)]
+    if not quick_only.empty:
+        print(f"\nOnly a QUICK result (full-scale experiment not run): {len(quick_only)}")
+        for _, r in quick_only.iterrows():
+            print(f"  - {r['model_name']} / {r['feature_set']}")
     if smoke:
         print(f"\nExcluded SMOKE result files ({len(smoke)}; never part of the comparison):")
         for r in smoke:

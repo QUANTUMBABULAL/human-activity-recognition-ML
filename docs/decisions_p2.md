@@ -8,7 +8,7 @@ decisions/deviations table, filled in as real runs happen.
 
 | Owner | Files |
 |---|---|
-| **P2** | `har/models_p2/*`, `experiments/p2/*`, `experiments/compare_results.py`, `tests/test_p2_models.py`, `tests/test_compare_results.py`, `docs/decisions_p2.md` |
+| **P2** | `har/models_p2/*`, `experiments/p2/*`, `experiments/compare_results.py`, `experiments/quick_mode.py`, `tests/test_p2_models.py`, `tests/test_compare_results.py`, `tests/test_quick_mode.py`, `docs/decisions_p2.md` |
 | P1 (frozen, read-only for P2) | `har/{config,metrics,runner,synthetic,plots}.py` |
 | P1 (used, not changed) | `har/{data,splits}.py`, `data/processed/*`, `results/split_meta.json` |
 
@@ -160,6 +160,7 @@ Fill in one row per decision as runs happen (continue P1's numbering style with 
 | P2-18 | MLP reproducibility | n/a | `keras.utils.set_random_seed(229)` (Python, NumPy, TF) at the start of every `fit`, `Dropout(seed=229)`, and `tf.config.experimental.enable_op_determinism()` (process-wide). Same machine + versions (TF 2.21.0, Keras 3.15.1, CPU) -> bit-identical probabilities (tested) | Not guaranteed across machines, CPU instruction sets, thread counts or TF/oneDNN versions. TF on native Windows has no GPU support, so runs are CPU only |
 | P2-19 | AdaBoost final selection rule | Chosen 500 trees / depth 10 (reduced), 250 / depth 9 (full); selection method not stated | Final real-data runs use `--rule one_sd`. The CV grid (depth {6,8,9,10,12} x trees {50,100,250,500}, 5 folds, 100k training rows) is unchanged. One-SD picks the cheapest config (fewest trees, then shallowest) whose mean val. accuracy is within one SD of the best. Selection uses CV on training rows only. `cv.best_by_max_val` still records the max-rule pick. Decided 2026-10-05, before any AdaBoost test evaluation | CV differences inside one SD are noise. Without this rule, noise could select a much more expensive config (e.g. 500 trees / depth 12 on `full`, final fit roughly 11 h, section 11) for no real gain. Same principle as the paper's DT rule (P2-02). Differs from RF's `max` rule (P2-05), where the tree count is fixed and cost is not the issue. SAMME instead of SAMME.R remains an unavoidable sklearn API deviation (P2-08) |
 | P2-20 | MLP batch size / learning rate: pre-declared fallback | Paper states SGD only; no batch size or learning rate (P2-14) | Default plan: batch 32, learning rate 0.01, 100 epochs (P2-14/15). Before the final MLP runs, time one epoch on the training rows (no test evaluation). If the timing implies that 100 epochs would exceed **about 10 h per feature set**, both sets use the fallback: **batch 256, learning rate 0.08**, same architecture, same 100 epochs unless the timing/implementation requires otherwise. The fallback is a **computational deviation**. If used, it is recorded automatically in the result JSON's `params` (`batch_size`, `learning_rate`) and must be written here as a dated row with the measured epoch time. Decided 2026-10-05, before any MLP test evaluation | The trigger is runtime only, never test performance. Batch 256 at learning rate 0.01 would make 8x fewer updates (574,200 vs 4,593,400 over 100 epochs), roughly the progress of ~12-13 batch-32 epochs, so "100 epochs" would no longer mean the same training. Scaling the learning rate with the batch (x8 -> 0.08, a heuristic) keeps progress per epoch comparable. Gradient noise drops ~8x (less implicit regularisation). Both values remain our assumptions, not paper values |
+| P2-21 | Resource-constrained educational experiment mode (`--quick`) | Paper configs: RF 100 trees / depth 20; AdaBoost 250-500 trees / depth 9-10 chosen from a CV grid; MLP 100 epochs; SVM C by 5-fold CV over kernels x C | A separate, fixed, cheap preset in each expensive script, next to the unchanged normal mode: **RF** reduced, 20 trees, depth 10, `n_jobs` 2, no CV; **AdaBoost** reduced, 20 trees, depth 6, learning rate 1.0, no CV grid; **MLP** reduced, same 512-512 network, 5 epochs, batch 256, learning rate 0.08 (the P2-20 fallback pair), 10% validation slice, no early stopping, no search; **SVM** Stage A, reduced, RBF with the paper's C (1000 reduced / 100 full), 30,000 seeded training rows, no CV. All fit once on the frozen training split (SVM: a seeded subset of it) and are evaluated once on the full frozen test split. Output `<model>_<fs>_quick.json`, JSON `status: "QUICK"`, `quick_config`, `hyperparameter_tuning: "skipped ..."`, notes starting `QUICK`. Decided 2026-10-06, before any RF / AdaBoost / MLP / SVM test evaluation | Project priority is learning and comparing algorithms, not maximising accuracy, and compute is limited (sections 11-12: full AdaBoost and MLP runs take hours per feature set on this 15 W laptop CPU). Effect: QUICK numbers are expected to be lower than, and are not comparable to, full or paper numbers. They are kept apart from FULL everywhere (section 14) |
 | | | | | |
 
 ## 11. AdaBoost compute notes
@@ -232,7 +233,8 @@ python -m experiments.compare_results --results-dir DIR  # another results tree 
 `results/split_meta.json` for the frozen split's row counts. It never loads PAMAP2, never imports
 TensorFlow and never fits a model. Model and feature set come from the JSON's own `model` /
 `feature_set` fields. The file stem `<model>_<feature_set>` is the **primary** result for that
-pair. A tagged stem such as `svm_rbf_full_stageC` is listed as an "extra run" and is not ranked.
+pair; `<model>_<feature_set>_quick` is the primary QUICK result for it (both can exist and are
+shown as separate rows). A tagged stem such as `svm_rbf_full_stageC` is listed as an "extra run" and is not ranked.
 `*_cv.csv`, `*_history.csv` and other non-JSON files are ignored.
 
 **Expected grid.** 6 models (`logreg`, `svm_rbf`, `decision_tree`, `random_forest`, `adaboost`,
@@ -245,6 +247,7 @@ pair. A tagged stem such as `svm_rbf_full_stageC` is listed as an "extra run" an
 | FULL | `n_train` >= 1,633,207 and `n_test` >= 288,213 (counts read from `split_meta.json`) | table, both rankings, full-vs-reduced, gap vs paper |
 | SUBSAMPLE | fewer training or test rows (e.g. SVM Stage A fits 50k rows, or any `--fit-n` / `--test-n` run) | table, the "all non-smoke" ranking only; labelled "reproduced on a subsample" |
 | UNVERIFIED | `split_meta.json` missing or row counts missing, so FULL cannot be checked | as SUBSAMPLE; never counted as FULL |
+| QUICK | JSON `status` is `"QUICK"`, tag contains `quick`, or notes start with `QUICK` (P2-21). Checked **before** row counts, so a quick run on all rows is still QUICK | table, timing table and CSV; ranked **only** in a separate "QUICK runs only" pool; never in the FULL ranking, the FULL + SUBSAMPLE ranking, full-vs-reduced or OURS vs PAPER. A pair with only a QUICK result is listed under "Only a QUICK result (full-scale experiment not run)" |
 | SMOKE | tag contains `smoke` or notes start with `SMOKE TEST` | **nothing**: listed under "Excluded SMOKE result files" only, not in the CSV |
 | MALFORMED | invalid JSON, not an object, or missing a `REQUIRED_KEYS` field | listed under "Problems"; the pair shows MALFORMED with no metrics |
 | NOT RUN | no usable primary file for the pair | table and CSV with empty metric cells |
@@ -279,3 +282,68 @@ F1 or timing values, so none are shown. `comparison.csv` contains our results on
 
 Tests: `tests/test_compare_results.py` uses hand-made JSON fixtures in temp directories (written
 with `save_result` so the format is real). Their numbers are test inputs, never results.
+
+## 14. Resource-constrained educational experiment mode (`--quick`, P2-21)
+
+**Why it exists.** The goal of this project is to learn how these algorithms work and to compare
+them, not to get the highest accuracy. Our compute is limited: one 15 W laptop CPU (section 11), and
+TensorFlow on native Windows has no GPU (P2-18). The full paper-style experiments are expensive. A
+full AdaBoost CV grid plus final fit takes several hours per feature set (section 11), and 100 MLP
+epochs at batch 32 take about 4-6 h per feature set (section 12). `--quick` gives every expensive
+model one cheap run, so all six algorithms can be compared on the same frozen data. The normal
+mode is unchanged and is still the only way to get a FULL result.
+
+**What it changes.** Only the amount of computation: fewer trees, fewer epochs, no
+hyperparameter search, and for the SVM fewer training rows.
+
+| Script | Quick preset | Normal mode |
+|---|---|---|
+| `experiments.p2.run_random_forest --quick` | reduced, 20 trees, depth 10, `n_jobs` 2, no CV, all training rows | 5-fold CV over depth {10..30} at 100 trees, then fit |
+| `experiments.p2.run_adaboost --quick` | reduced, 20 trees, depth 6, learning rate 1.0, no CV, all training rows | 5-fold CV over depth {6..12} x trees {50,100,250,500}, then fit |
+| `experiments.p2.run_mlp --quick` | reduced, 512-512, 5 epochs, batch 256, lr 0.08, 10% validation slice, no early stopping | 100 epochs, batch 32, lr 0.01 |
+| `experiments.p1.run_svm --quick` | Stage A, reduced, RBF, paper C, 30,000 seeded training rows, no CV | CV over C on 20k rows, fit on 50k rows |
+
+`--feature-set full` or `both` may be given explicitly with `--quick`, for an educational
+full-vs-reduced comparison. Any other flag that would change the preset (for example `--epochs`,
+`--max-depth`, `--fit-n`, `--skip-tune`, `--C` or `--smoke`) is refused with an error, even when it is
+passed with its default value. So a QUICK result always means exactly this preset. `--n-jobs`
+is allowed for RF because it does not change the trees (P2-07). Keras uses a GPU automatically if
+TensorFlow sees one. The MLP JSON records `device` / `gpus` and the per-epoch `history`.
+
+**What it does not change.**
+
+- The frozen dataset, the rows fingerprint `46d008ac842d2c8f`, the frozen split
+  (`204cf31f6f415437`) and the original label IDs.
+- Test rows are still used only inside `run_experiment`, once, after the single fit. Nothing
+  is tuned on them. Quick mode tunes nothing at all. Its settings were fixed before any quick test
+  evaluation, and the SVM's C is the paper value, not one chosen by us.
+- Model code (`har/models_p2/*`, `har/models_p1/svm.py`), the runner and the metrics format are
+  unchanged. The MLP still fits its `StandardScaler` on the fitting rows only, and every estimator
+  still uses `SEED = 229`.
+- Existing result files. Quick results are written to `<model>_<fs>_quick.json`,
+  `confusion/<model>_<fs>_quick.csv` and, for the MLP, `mlp_<fs>_quick_history.csv`, so they can
+  never overwrite a FULL result.
+
+**How QUICK results must be reported.** Report them as "QUICK (reduced-compute educational run)"
+with their preset, never as a paper reproduction and never side by side with paper numbers as if
+they matched. `compare_results.py` enforces this (section 13): QUICK is ranked only against QUICK,
+and it is left out of the FULL rankings, the full-vs-reduced comparison and OURS vs PAPER. FULL and
+QUICK results for the same model are always separate rows.
+
+**Why reducing computation openly is more honest.** A 5-epoch MLP or a 20-tree forest is a
+different experiment from the paper's 100-epoch / 100-tree configuration. It is not a noisier
+version of the same experiment. Two dishonest options are easy. One is to run the cheap
+configuration and report it under the paper's name. The other is to keep the paper's name and
+silently cut epochs or trees. Either way, the number would hide its own cause. A lower accuracy
+would look like a failed reproduction, or a model would look worse than it is. Naming the
+reduction instead means three things:
+
+- every QUICK number carries its real configuration (`params`, `quick_config`, `status`), so a
+  reader knows exactly what was measured;
+- comparisons stay like-for-like: QUICK against QUICK under one fixed preset, FULL against FULL and
+  against the paper;
+- the gap between a QUICK result and the paper is reported as a consequence of less computation. It
+  is not evidence about the algorithm or about the paper's claim.
+
+A smaller experiment that is labelled correctly is a valid result about that smaller experiment.
+An unlabelled one would be a misleading result about the paper's experiment.

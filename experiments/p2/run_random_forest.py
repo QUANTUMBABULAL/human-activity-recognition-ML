@@ -3,12 +3,16 @@ OWNER: Person 2.
 
     python -m experiments.p2.run_random_forest --feature-set both
     python -m experiments.p2.run_random_forest --smoke          # quick pipeline check, NOT a result
+    python -m experiments.p2.run_random_forest --quick          # cheap educational run (status QUICK)
 
 Options: --tune-n 200000 (CV rows), --depth-grid 10 15 20 25 30, --trees-grid 100 (e.g. 50 100 200),
          --rule max|one_sd, --fit-n (default: all training rows), --skip-tune (paper: 100 trees,
          depth 20), --max-depth / --n-estimators (forced, no CV)
 --smoke uses tiny row counts and writes to a temp directory (never results/), so its numbers
 cannot be mistaken for real results.
+--quick (P2-21) is a fixed reduced-compute preset: reduced features, 20 trees, max_depth 10, n_jobs 2
+(override with --n-jobs; it does not change the trees), no CV, all training rows, full test split.
+Written to results/metrics/random_forest_<fs>_quick.json with status QUICK - never a FULL result.
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from experiments import quick_mode
 from har.config import N_FOLDS, RESULTS_DIR
 from har.data import get_xy, load_processed
 from har.models_p2 import random_forest as rf
@@ -25,9 +30,14 @@ from har.runner import run_experiment, subsample
 from har.splits import load_split, split_fingerprint
 
 SMOKE = {"tune_n": 5_000, "fit_n": 20_000, "test_n": 5_000, "depth_grid": [10, 20], "trees_grid": [20]}
+QUICK = {"feature_set": "reduced", "n_estimators": 20, "max_depth": 10, "n_jobs": 2}
+QUICK_LOCKED = ("tune_n", "depth_grid", "trees_grid", "fit_n", "test_n", "rule", "skip_tune",
+                "max_depth", "n_estimators")
 
 
 def run_feature_set(a, df, split, fs):
+    if a.quick:
+        return run_quick(a, df, split, fs)
     tune_idx = subsample(split["train"], a.tune_n)          # TRAINING rows only
     cv_info = {"n_folds": N_FOLDS, "tune_rows": int(len(tune_idx)), "depth_grid": a.depth_grid,
                "trees_grid": a.trees_grid, "max_features": rf.PAPER["max_features"], "rule": a.rule}
@@ -69,9 +79,31 @@ def run_feature_set(a, df, split, fs):
                           post_fit=rf.forest_info, tag=a.tag, results_dir=a.results_dir)
 
 
+def run_quick(a, df, split, fs):
+    """Fixed QUICK preset: no CV, one fit on all training rows, evaluated once on the test split."""
+    n_est, depth = QUICK["n_estimators"], QUICK["max_depth"]
+    config = {"feature_set": fs, "n_estimators": n_est, "max_depth": depth, "n_jobs": a.n_jobs,
+              "max_features": rf.PAPER["max_features"], "criterion": rf.PAPER["criterion"],
+              "fit_rows": "all training rows", "test_rows": "full test split"}
+    print(f"[{fs}] QUICK preset: n_estimators = {n_est}, max_depth = {depth}, n_jobs = {a.n_jobs} "
+          f"(paper: {rf.PAPER['n_estimators']}, {rf.PAPER['max_depth']}); no CV", flush=True)
+    return run_experiment(model_name="random_forest", owner="P2",
+                          model=rf.build(n_est, depth, n_jobs=a.n_jobs), df=df, split=split,
+                          feature_set=fs,
+                          params={"n_estimators": n_est, "max_depth": depth,
+                                  "max_features": rf.PAPER["max_features"],
+                                  "criterion": rf.PAPER["criterion"], "bootstrap": True},
+                          paper_test_accuracy=rf.PAPER_TEST_ACC[fs], cv_info=quick_mode.cv_info(),
+                          notes=f"{quick_mode.NOTE}; fixed n_estimators={n_est}, max_depth={depth}; "
+                                "final fit on all training rows; test on the full test split",
+                          post_fit=lambda m: {**rf.forest_info(m), **quick_mode.record(config)},
+                          tag=a.tag, results_dir=a.results_dir)
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--feature-set", choices=["full", "reduced", "both"], default="both")
+    ap.add_argument("--feature-set", choices=["full", "reduced", "both"], default=None,
+                    help="default: both (--quick: reduced)")
     ap.add_argument("--tune-n", type=int, default=200_000, help="training rows used for CV")
     ap.add_argument("--depth-grid", type=int, nargs="+", default=rf.DEPTH_GRID)
     ap.add_argument("--trees-grid", type=int, nargs="+", default=rf.N_ESTIMATORS_GRID)
@@ -84,8 +116,15 @@ def parse_args(argv=None):
     ap.add_argument("--n-jobs", type=int, default=-1, help="parallel trees inside each forest")
     ap.add_argument("--results-dir", default=None)
     ap.add_argument("--smoke", action="store_true", help="tiny run to check the pipeline; output to a temp dir")
+    quick_mode.add_argument(ap)
     a = ap.parse_args(argv)
+    quick_mode.check_args(ap, a, QUICK_LOCKED, argv)
+    a.feature_set = a.feature_set or (QUICK["feature_set"] if a.quick else "both")
     a.tag = ""
+    if a.quick:
+        if a.n_jobs == ap.get_default("n_jobs"):
+            a.n_jobs = QUICK["n_jobs"]
+        a.tag = quick_mode.TAG
     if a.smoke:
         a.tune_n, a.fit_n, a.test_n = SMOKE["tune_n"], SMOKE["fit_n"], SMOKE["test_n"]
         a.depth_grid, a.trees_grid = SMOKE["depth_grid"], SMOKE["trees_grid"]
