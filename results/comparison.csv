@@ -1,0 +1,13 @@
+model,model_name,feature_set,status,stem,primary,protocol,test_accuracy,test_macro_f1,test_weighted_f1,train_accuracy,fit_seconds,predict_seconds,n_train,n_test,params,notes,source
+logreg,Logistic Regression,reduced,FULL,logreg_reduced,True,random_85_15,0.6431562767814082,0.6016905382580432,0.6353685075828032,0.64528,36.76,0.05,1633207.0,288213.0,"{""C"": 1.0, ""max_iter"": 1000, ""penalty"": ""l2"", ""solver"": ""sag""}",C chosen by 5-fold CV on 200000 training rows; final fit on all training rows,C:\Users\CHINMAI\Desktop\HAR\human-activity-recognition-ML\results\metrics\logreg_reduced.json
+logreg,Logistic Regression,full,FULL,logreg_full,True,random_85_15,0.8202440556116484,0.7899786454846646,0.817765513883805,0.82066,53.28,0.08,1633207.0,288213.0,"{""C"": 1.0, ""max_iter"": 1000, ""penalty"": ""l2"", ""solver"": ""sag""}",C chosen by 5-fold CV on 200000 training rows; final fit on all training rows,C:\Users\CHINMAI\Desktop\HAR\human-activity-recognition-ML\results\metrics\logreg_full.json
+svm_rbf,SVM (RBF),reduced,NOT RUN,svm_rbf_reduced,True,,,,,,,,,,,,
+svm_rbf,SVM (RBF),full,NOT RUN,svm_rbf_full,True,,,,,,,,,,,,
+decision_tree,Decision Tree,reduced,FULL,decision_tree_reduced,True,random_85_15,0.9929912946327889,0.9922132468938162,0.9929897182394006,0.99833,38.69,0.04,1633207.0,288213.0,"{""criterion"": ""gini"", ""max_depth"": 25, ""min_samples_leaf"": 1}",max_depth chosen by 5-fold CV (one_sd rule) on 200000 training rows; final fit on all training rows; test on the full test split,C:\Users\CHINMAI\Desktop\HAR\human-activity-recognition-ML\results\metrics\decision_tree_reduced.json
+decision_tree,Decision Tree,full,FULL,decision_tree_full,True,random_85_15,0.9981957788163615,0.9978282726788384,0.9981957186839524,0.99967,122.35,0.04,1633207.0,288213.0,"{""criterion"": ""gini"", ""max_depth"": 30, ""min_samples_leaf"": 1}",max_depth chosen by 5-fold CV (one_sd rule) on 200000 training rows; final fit on all training rows; test on the full test split,C:\Users\CHINMAI\Desktop\HAR\human-activity-recognition-ML\results\metrics\decision_tree_full.json
+random_forest,Random Forest,reduced,NOT RUN,random_forest_reduced,True,,,,,,,,,,,,
+random_forest,Random Forest,full,NOT RUN,random_forest_full,True,,,,,,,,,,,,
+adaboost,AdaBoost,reduced,NOT RUN,adaboost_reduced,True,,,,,,,,,,,,
+adaboost,AdaBoost,full,NOT RUN,adaboost_full,True,,,,,,,,,,,,
+mlp,MLP,reduced,NOT RUN,mlp_reduced,True,,,,,,,,,,,,
+mlp,MLP,full,NOT RUN,mlp_full,True,,,,,,,,,,,,

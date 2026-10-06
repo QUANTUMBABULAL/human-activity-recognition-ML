@@ -1,0 +1,47 @@
+{
+  "model": "logreg",
+  "owner": "P1",
+  "feature_set": "reduced",
+  "protocol": "random_85_15",
+  "seed": 229,
+  "n_train": 1633207,
+  "n_test": 288213,
+  "train_accuracy": 0.64528,
+  "train_accuracy_rows": 100000,
+  "test_accuracy": 0.6431562767814082,
+  "test_macro_f1": 0.6016905382580432,
+  "test_weighted_f1": 0.6353685075828032,
+  "params": {
+    "C": 1.0,
+    "solver": "sag",
+    "penalty": "l2",
+    "max_iter": 1000
+  },
+  "cv": {
+    "n_folds": 5,
+    "tune_rows": 200000,
+    "grid": [
+      1e-05,
+      0.0001,
+      0.001,
+      0.01,
+      0.1,
+      1.0,
+      10.0
+    ],
+    "rule": "max mean val accuracy",
+    "chosen_C": 1.0
+  },
+  "fit_seconds": 36.76,
+  "predict_seconds": 0.05,
+  "paper_test_accuracy": 0.639,
+  "notes": "C chosen by 5-fold CV on 200000 training rows; final fit on all training rows",
+  "versions": {
+    "python": "3.11.9",
+    "numpy": "2.4.6",
+    "pandas": "3.0.6",
+    "sklearn": "1.9.1",
+    "tensorflow": "2.21.0"
+  },
+  "timestamp_utc": "2026-10-05T16:31:35+00:00"
+}

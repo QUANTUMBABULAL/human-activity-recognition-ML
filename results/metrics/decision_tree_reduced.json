@@ -1,0 +1,53 @@
+{
+  "model": "decision_tree",
+  "owner": "P2",
+  "feature_set": "reduced",
+  "protocol": "random_85_15",
+  "seed": 229,
+  "n_train": 1633207,
+  "n_test": 288213,
+  "train_accuracy": 0.99833,
+  "train_accuracy_rows": 100000,
+  "test_accuracy": 0.9929912946327889,
+  "test_macro_f1": 0.9922132468938162,
+  "test_weighted_f1": 0.9929897182394006,
+  "params": {
+    "criterion": "gini",
+    "max_depth": 25,
+    "min_samples_leaf": 1
+  },
+  "cv": {
+    "n_folds": 5,
+    "tune_rows": 200000,
+    "grid": [
+      2,
+      4,
+      6,
+      8,
+      10,
+      12,
+      15,
+      18,
+      20,
+      25,
+      30
+    ],
+    "rule": "one_sd",
+    "best_by_max_val": 30,
+    "chosen_max_depth": 25
+  },
+  "fit_seconds": 38.69,
+  "predict_seconds": 0.04,
+  "paper_test_accuracy": 0.873,
+  "notes": "max_depth chosen by 5-fold CV (one_sd rule) on 200000 training rows; final fit on all training rows; test on the full test split",
+  "tree_depth": 25,
+  "n_leaves": 10651,
+  "versions": {
+    "python": "3.11.9",
+    "numpy": "2.4.6",
+    "pandas": "3.0.6",
+    "sklearn": "1.9.1",
+    "tensorflow": "2.21.0"
+  },
+  "timestamp_utc": "2026-10-05T16:22:51+00:00"
+}
