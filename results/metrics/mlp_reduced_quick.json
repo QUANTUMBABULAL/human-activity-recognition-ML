@@ -1,0 +1,116 @@
+{
+  "model": "mlp",
+  "owner": "P2",
+  "feature_set": "reduced",
+  "protocol": "random_85_15",
+  "seed": 229,
+  "n_train": 1633207,
+  "n_test": 288213,
+  "train_accuracy": 0.91656,
+  "train_accuracy_rows": 100000,
+  "test_accuracy": 0.9160933059924431,
+  "test_macro_f1": 0.9011810361141,
+  "test_weighted_f1": 0.9147197583603573,
+  "params": {
+    "hidden_units": [
+      512,
+      512
+    ],
+    "activation": "relu",
+    "dropout": 0.5,
+    "output_units": 12,
+    "output_activation": "softmax",
+    "loss": "categorical_crossentropy",
+    "optimizer": "SGD",
+    "learning_rate": 0.08,
+    "momentum": 0.0,
+    "batch_size": 256,
+    "epochs": 5,
+    "val_frac": 0.1,
+    "patience": null,
+    "scaler": "StandardScaler (fit on fitting rows only)",
+    "seed": 229,
+    "deterministic_ops": true
+  },
+  "cv": {
+    "selection": "none - paper architecture; validation slice from training rows used for monitoring only",
+    "performed": false,
+    "rule": "quick preset (no CV)",
+    "tuning": "skipped (quick mode: fixed preset, no cross-validation, no search)"
+  },
+  "fit_seconds": 156.9,
+  "predict_seconds": 0.44,
+  "paper_test_accuracy": 0.814,
+  "notes": "QUICK - resource-constrained educational run (fixed reduced-compute preset, hyperparameter tuning skipped); NOT a paper reproduction and NOT comparable to FULL results; fit on all training rows, of which a seeded 10% slice is held out for validation monitoring; fixed 5 epochs; test on the full test split",
+  "epochs_run": 5,
+  "n_fit_rows": 1469886,
+  "n_val_rows": 163321,
+  "n_params": 274956,
+  "keras_version": "3.13.2",
+  "final_train_loss": 0.36123788356781006,
+  "final_train_accuracy_epoch": 0.8766319155693054,
+  "final_val_loss": 0.2506921589374542,
+  "final_val_accuracy": 0.9140588045120239,
+  "best_val_loss_epoch": 5,
+  "best_val_accuracy": 0.9140588045120239,
+  "device": "GPU",
+  "gpus": [
+    "/physical_device:GPU:0"
+  ],
+  "history": {
+    "accuracy": [
+      0.7609433531761169,
+      0.8320794701576233,
+      0.853228747844696,
+      0.8668134808540344,
+      0.8766319155693054
+    ],
+    "loss": [
+      0.7522507905960083,
+      0.5183903574943542,
+      0.44126686453819275,
+      0.39422309398651123,
+      0.36123788356781006
+    ],
+    "val_accuracy": [
+      0.8471843600273132,
+      0.874927282333374,
+      0.8906509280204773,
+      0.9033131003379822,
+      0.9140588045120239
+    ],
+    "val_loss": [
+      0.4724240303039551,
+      0.37281253933906555,
+      0.31740930676460266,
+      0.27946460247039795,
+      0.2506921589374542
+    ]
+  },
+  "status": "QUICK",
+  "experiment_mode": "quick",
+  "quick_config": {
+    "feature_set": "reduced",
+    "epochs": 5,
+    "batch_size": 256,
+    "learning_rate": 0.08,
+    "val_frac": 0.1,
+    "patience": null,
+    "hidden_units": [
+      512,
+      512
+    ],
+    "test_rows": "full test split",
+    "fit_rows": "all training rows minus the seeded validation slice"
+  },
+  "hyperparameter_tuning": "skipped (quick mode: fixed preset, no cross-validation, no search)",
+  "quick_note": "QUICK - resource-constrained educational run (fixed reduced-compute preset, hyperparameter tuning skipped); NOT a paper reproduction and NOT comparable to FULL results",
+  "versions": {
+    "python": "3.13.15",
+    "numpy": "2.1.3",
+    "pandas": "2.2.3",
+    "sklearn": "1.6.1",
+    "tensorflow": "2.21.0"
+  },
+  "timestamp_utc": "2026-10-06T06:02:25+00:00"
+}

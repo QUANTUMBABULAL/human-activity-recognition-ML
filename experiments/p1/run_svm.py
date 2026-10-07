@@ -7,6 +7,12 @@ Stage C (OPTIONAL): Stage A with a larger --fit-n (e.g. 100000-175000).
 
     python -m experiments.p1.run_svm --stage A --feature-set both > svm_stageA.log 2>&1
     python -m experiments.p1.run_svm --stage B --feature-set both --tune-n 10000
+    python -m experiments.p1.run_svm --quick       # cheap educational run (status QUICK)
+
+--quick (decision P2-21 in docs/decisions_p2.md) is a fixed reduced-compute preset: Stage A only,
+reduced features, RBF with the paper's C for that feature set (C = 1000 reduced / 100 full; no CV,
+nothing tuned), final fit on a seeded 30,000-row subset of the TRAINING rows, full test split.
+Written to results/metrics/svm_rbf_<fs>_quick.json with status QUICK - never a FULL result.
 """
 from __future__ import annotations
 
@@ -14,14 +20,20 @@ import argparse
 
 import pandas as pd
 
+from experiments import quick_mode
 from har.config import N_FOLDS, RESULTS_DIR
 from har.data import get_xy, load_processed
 from har.models_p1 import svm
 from har.runner import run_experiment, subsample
 from har.splits import load_split, split_fingerprint
 
+QUICK = {"feature_set": "reduced", "fit_n": 30_000, "kernel": "rbf"}
+QUICK_LOCKED = ("stage", "tune_n", "fit_n", "test_n", "skip_tune", "C")
+
 
 def stage_a(a, df, split, fs):
+    if a.quick:
+        return run_quick(a, df, split, fs)
     tune_idx = subsample(split["train"], a.tune_n)           # TRAINING rows only
     cv_info = {"n_folds": N_FOLDS, "tune_rows": int(len(tune_idx)), "grid": svm.C_GRID,
                "rule": "max mean val accuracy"}
@@ -47,6 +59,25 @@ def stage_a(a, df, split, fs):
                    notes=f"{note}; {fit_note}{test_note}",
                    post_fit=lambda m: {"n_support_vectors": svm.n_support_vectors(m)},
                    results_dir=a.results_dir)
+
+
+def run_quick(a, df, split, fs):
+    """Fixed QUICK preset: paper C (no CV), fit on QUICK['fit_n'] seeded training rows, full test split."""
+    C, fit_n = svm.PAPER[fs]["C"], QUICK["fit_n"]
+    n_fit = min(fit_n, len(split["train"]))
+    config = {"feature_set": fs, "kernel": "rbf", "C": C, "gamma": "auto", "C_source": "paper value (not tuned)",
+              "fit_rows": n_fit, "test_rows": "full test split"}
+    print(f"[{fs}] QUICK preset: rbf, C = {C} (paper value, no CV), fit on {n_fit} training rows", flush=True)
+    return run_experiment(model_name="svm_rbf", owner="P1", model=svm.build("rbf", C, cache_size_mb=a.cache_mb * 4),
+                          df=df, split=split, feature_set=fs,
+                          params={"kernel": "rbf", "C": C, "gamma": "auto"},
+                          paper_test_accuracy=svm.PAPER_TEST_ACC[fs], cv_info=quick_mode.cv_info(),
+                          fit_n=fit_n, train_eval_n=20_000,
+                          notes=f"{quick_mode.NOTE}; C taken from paper (no CV); fit on {n_fit} sampled "
+                                "training rows (subsample); test on the full test split",
+                          post_fit=lambda m: {"n_support_vectors": svm.n_support_vectors(m),
+                                              **quick_mode.record(config)},
+                          tag=quick_mode.TAG, results_dir=a.results_dir)
 
 
 def stage_b(a, df, split, fs):
@@ -79,10 +110,11 @@ def summarise_kernels(results_dir):
     print("\nKernel gaps (paper: ~+15 vs linear, ~+10 vs poly):\n", out.round(2).to_string(index=False))
 
 
-def main():
+def parse_args(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", choices=["A", "B"], default="A")
-    ap.add_argument("--feature-set", choices=["full", "reduced", "both"], default="both")
+    ap.add_argument("--feature-set", choices=["full", "reduced", "both"], default=None,
+                    help="default: both (--quick: reduced)")
     ap.add_argument("--tune-n", type=int, default=None, help="CV rows (default 20000 for A, 10000 for B)")
     ap.add_argument("--fit-n", type=int, default=50_000, help="Stage A final-fit rows")
     ap.add_argument("--test-n", type=int, default=None, help="evaluate on a seeded test subset (fallback)")
@@ -92,10 +124,17 @@ def main():
     ap.add_argument("--cache-mb", type=int, default=500, help="libsvm cache per CV worker (final fit uses 4x)")
     ap.add_argument("--n-jobs", type=int, default=N_FOLDS)
     ap.add_argument("--results-dir", default=str(RESULTS_DIR))
-    a = ap.parse_args()
+    quick_mode.add_argument(ap)
+    a = ap.parse_args(argv)
+    quick_mode.check_args(ap, a, QUICK_LOCKED, argv)
+    a.feature_set = a.feature_set or (QUICK["feature_set"] if a.quick else "both")
     if a.tune_n is None:
         a.tune_n = 20_000 if a.stage == "A" else 10_000
+    return a
 
+
+def main(argv=None):
+    a = parse_args(argv)
     df, split = load_processed(), load_split()
     print("split fingerprint:", split_fingerprint(split), flush=True)
     for fs in (["full", "reduced"] if a.feature_set == "both" else [a.feature_set]):
