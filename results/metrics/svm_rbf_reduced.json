@@ -1,0 +1,46 @@
+{
+  "model": "svm_rbf",
+  "owner": "P1",
+  "feature_set": "reduced",
+  "protocol": "random_85_15",
+  "seed": 229,
+  "n_train": 20000,
+  "n_test": 20000,
+  "train_accuracy": 0.9945,
+  "train_accuracy_rows": 20000,
+  "test_accuracy": 0.88845,
+  "test_macro_f1": 0.8717568567576982,
+  "test_weighted_f1": 0.8879051187276055,
+  "params": {
+    "kernel": "rbf",
+    "C": 1000.0,
+    "gamma": "auto"
+  },
+  "cv": {
+    "n_folds": 5,
+    "tune_rows": 20000,
+    "grid": [
+      0.01,
+      0.1,
+      1.0,
+      10.0,
+      100.0,
+      1000.0
+    ],
+    "rule": "paper value",
+    "chosen_C": 1000.0
+  },
+  "fit_seconds": 11.99,
+  "predict_seconds": 12.41,
+  "paper_test_accuracy": 0.95,
+  "notes": "C taken from paper (no CV); fit on 20000 sampled training rows; test on a seeded 20000-row subset",
+  "n_support_vectors": 6891,
+  "versions": {
+    "python": "3.13.16",
+    "numpy": "2.1.3",
+    "pandas": "2.2.3",
+    "sklearn": "1.6.1",
+    "tensorflow": "2.21.0"
+  },
+  "timestamp_utc": "2026-10-07T02:52:00+00:00"
+}

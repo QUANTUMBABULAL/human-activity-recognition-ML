@@ -65,6 +65,20 @@ for n in (5_000, 10_000, 20_000):
 | LR ConvergenceWarning | `--final-max-iter 5000`; `--tune-n 100000` |
 | Low RAM during SVM CV | `--n-jobs 2 --cache-mb 300` |
 
+## Streamlit Dashboard
+```bash
+python -m streamlit run app/streamlit_app.py
+```
+The Streamlit dashboard visualizes existing experiment results and provides an interactive prediction
+demo using held-out PAMAP2 samples. It does not retrain models.
+
+Pages: Overview · Models · Confusion Matrix · Predict · About. Only completed experiments are shown.
+The Predict page lists only models with a saved artifact in `artifacts/` (`<stem>.joblib` +
+`<stem>_metadata.json`; the experiments themselves save none). The FULL Decision Tree artifact is
+exported by hand with `python -m app.export_demo_model --model decision_tree --feature-set full`.
+This refits the reported configuration on the frozen training split and saves it only if it
+reproduces the saved result exactly. Tests: `python -m pytest tests/test_dashboard.py -q`.
+
 ## Checking both laptops use identical data
 `build_dataset` prints `SPLIT FINGERPRINT` and `ROWS FINGERPRINT`. Both must match across laptops
 (and match `results/split_meta.json` on main).

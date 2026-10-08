@@ -1,0 +1,10 @@
+{
+  "seed": 229,
+  "test_fraction": 0.15,
+  "n_rows": 1921420,
+  "n_train": 1633207,
+  "n_test": 288213,
+  "fingerprint": "204cf31f6f415437",
+  "hr_method": "linear",
+  "rows_fingerprint": "46d008ac842d2c8f"
+}
