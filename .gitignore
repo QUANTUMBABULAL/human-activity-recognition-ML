@@ -12,4 +12,5 @@ results/figures/*.png
 svm_stageA
 .DS_Store
 Thumbs.db
-.vscode/
+.vscode/.agents/
+.claude/
