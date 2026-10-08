@@ -7,3 +7,4 @@ matplotlib>=3.8
 pytest>=8
 tensorflow>=2.16   # Person 2 (MLP). Person 1 may skip it; the MLP test auto-skips.
 tabulate>=0.9
+streamlit>=1.50       # dashboard (app/streamlit_app.py); brings altair
