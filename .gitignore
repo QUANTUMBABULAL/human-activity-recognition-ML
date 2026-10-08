@@ -14,3 +14,4 @@ svm_stageA
 Thumbs.db
 .vscode/.agents/
 .claude/
+.agents/
